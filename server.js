@@ -504,6 +504,73 @@ if (msg.t === "sheet_perm_set") {
         value
       });
     }
+
+
+    // =========================================================
+    // Sheet Import (client sends payload, server assigns new id)
+    // =========================================================
+    if (msg.t === "sheet_import") {
+      const id = msg.id;
+      const payload = String(msg.payload ?? msg.value ?? "").trim();
+      if (!payload) return send(ws, { t: "sheet_importReply", replyTo: id, ok: false, err: "empty_payload" });
+
+      // basic safety cap (~1.5MB base64)
+      if (payload.length > 1_500_000) {
+        return send(ws, { t: "sheet_importReply", replyTo: id, ok: false, err: "payload_too_large" });
+      }
+
+      const makeId = () => {
+        const rand = Math.random().toString(36).slice(2, 8);
+        return `sh_${Date.now().toString(36)}_${rand}`;
+      };
+
+      let key = makeId();
+      // ensure unique key
+      const has = (k) => TABLES.sheets.some((row) => row && row[0] === k);
+      for (let i = 0; i < 8 && has(key); i++) key = makeId();
+      if (has(key)) {
+        return send(ws, { t: "sheet_importReply", replyTo: id, ok: false, err: "id_collision" });
+      }
+
+      TABLES.sheets.push([key, payload]);
+      try { scheduleSave("sheets"); } catch (_) {}
+
+      // Grant to the importing user (players need visibility to see it)
+      try {
+        const who = usernameOf(ws);
+        if (who && who !== "(unknown)") {
+          addUserSheetId(who, key);
+          send(ws, { t: "player_indexs_set", sheetIds: getUserSheetIds(who) });
+        }
+      } catch (_) {}
+
+      // Broadcast to other connected clients (ACK tracked)
+      try {
+        const senderName = usernameOf(ws);
+        const ackId = `sheet:create:${key}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`;
+        const expected = new Set();
+        const received = new Set();
+        for (const c of clients) {
+          if (c === ws) continue;
+          expected.add(c);
+        }
+        for (const c of expected) {
+          sendSafe(c, { t: "sheet_created", ackId, key, value: payload });
+        }
+        const timer = setTimeout(() => finalizeAck(ackId, "timeout"), 2000);
+        PENDING_ACKS.set(ackId, { tableName: "sheets", key, senderName, expected, received, startedAt: Date.now(), timer });
+        if (expected.size === 0) finalizeAck(ackId, "no-recipients");
+      } catch (_) {}
+
+      // Audit log
+      try {
+        const who = USERNAMES.get(ws) || "(unknown)";
+        console.log(`[NET] sheets imported by ${who}: ${key}`);
+      } catch (_) {}
+
+      return send(ws, { t: "sheet_importReply", replyTo: id, ok: true, key, value: payload });
+    }
+
 	if (msg.t === "tableAppend") {
       const id = msg.id; // request id (from netRequest)
       const key = String(msg.key || "").trim();
