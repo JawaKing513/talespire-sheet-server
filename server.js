@@ -1,12 +1,24 @@
+const http = require("http");
 const { WebSocketServer, WebSocket } = require("ws");
 const fs = require("fs");
 const path = require("path");
 
 const PORT = process.env.PORT || 8787;
-server.listen(PORT, () => {
-  console.log("Server listening on", PORT);
+
+// ✅ Define the HTTP server (so `server` exists)
+const server = http.createServer((req, res) => {
+  // simple health check so Render is happy
+  res.writeHead(200, { "Content-Type": "text/plain" });
+  res.end("ok");
 });
-const wss = new WebSocketServer({ port: PORT });
+
+// ✅ Attach WebSocket server to the HTTP server
+const wss = new WebSocketServer({ server });
+
+// ✅ Listen on Render’s port
+server.listen(PORT, "0.0.0.0", () => {
+  console.log("[NET] listening on", PORT);
+});
 
 let host = null;
 const clients = new Set();
