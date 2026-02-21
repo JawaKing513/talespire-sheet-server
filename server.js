@@ -96,10 +96,15 @@ const TABLES = {
   feats: [],
   abilities: [],
   sheets: [],
+  loot_tables: [],
+  shops: [],
 };
 
 // Per-player sheet visibility map: username -> [sheetId,...]
 let PLAYER_INDEXS = {};
+
+// Per-player loot table visibility: username -> [lootTableId,...]
+let PLAYER_LOOT_INDEXS = {};
 
 
 // =========================================================
@@ -118,7 +123,10 @@ const TABLE_FILES = {
   feats: path.join(DATA_DIR, "feats.json"),
   abilities: path.join(DATA_DIR, "abilities.json"),
   sheets: path.join(DATA_DIR, "sheets.json"),
+  loot_tables: path.join(DATA_DIR, "loot_tables.json"),
+  shops: path.join(DATA_DIR, "shops.json"),
   player_indexs: path.join(DATA_DIR, "player_indexs.json"),
+  player_loot_indexs: path.join(DATA_DIR, "player_loot_indexs.json"),
 };
 
 function ensureDataDir() {
@@ -177,6 +185,8 @@ function saveTableNow(tableName) {
       (t === "statuses") ? TABLES.statuses :
       (t === "feats") ? TABLES.feats :
       (t === "abilities") ? TABLES.abilities :
+      (t === "loot_tables") ? TABLES.loot_tables :
+      (t === "shops") ? TABLES.shops :
       TABLES.sheets;
 
     atomicWriteJson(TABLE_FILES[t], arr);
@@ -218,6 +228,43 @@ function setUserSheetIds(name, ids) {
   } catch (e) {
     console.log(`[PERSIST] failed saving player_indexs: ${e?.message || e}`);
   }
+}
+
+
+// ===== Loot table visibility helpers =====
+function getUserLootIds(name) {
+  const n = normalizeUser(name);
+  const arr = PLAYER_LOOT_INDEXS?.[n];
+  return Array.isArray(arr) ? arr.map(String).filter(Boolean) : [];
+}
+function setUserLootIds(name, ids) {
+  const n = normalizeUser(name);
+  if (!n) return;
+  const out = Array.isArray(ids) ? ids.map(String).filter(Boolean) : [];
+  PLAYER_LOOT_INDEXS[n] = Array.from(new Set(out));
+  try {
+    ensureDataDir();
+    atomicWriteJson(TABLE_FILES.player_loot_indexs, PLAYER_LOOT_INDEXS);
+  } catch (e) {
+    console.log(`[PERSIST] failed saving player_loot_indexs: ${e?.message || e}`);
+  }
+}
+function addUserLootId(name, lootId) {
+  const n = normalizeUser(name);
+  const id = String(lootId || "").trim();
+  if (!n || !id) return;
+  const before = getUserLootIds(n);
+  if (before.includes(id)) return;
+  before.push(id);
+  setUserLootIds(n, before);
+}
+function removeUserLootId(name, lootId) {
+  const n = normalizeUser(name);
+  const id = String(lootId || "").trim();
+  if (!n || !id) return;
+  const before = getUserLootIds(n);
+  const after = before.filter((x) => x !== id);
+  setUserLootIds(n, after);
 }
 
 function addUserSheetId(name, sheetId) {
@@ -435,7 +482,66 @@ if (msg.t === "sheet_perm_set") {
     if (host && usernameOf(host) === normalizeUser(user)) { try { sendSheetToWs(host, sheetId); } catch (_) {} }
   }
 
-  return send(ws, { t: "sheet_perm_setReply", replyTo: id, ok: true });
+  
+
+// =========================================================
+// Loot table visibility (server-authoritative) : player_loot_indexs
+// =========================================================
+if (msg.t === "player_loot_indexs_get") {
+  const id = msg.id;
+  const me = usernameOf(ws);
+  return send(ws, {
+    t: "player_loot_indexs_getReply",
+    replyTo: id,
+    ok: true,
+    user: me,
+    lootIds: getUserLootIds(me)
+  });
+}
+
+if (msg.t === "player_loot_indexs_ensure") {
+  const id = msg.id;
+  const me = usernameOf(ws);
+  const lootId = String(msg.lootId || "").trim();
+  if (!lootId) return send(ws, { t: "player_loot_indexs_ensureReply", replyTo: id, ok: false, err: "missing_lootId" });
+
+  addUserLootId(me, lootId);
+  sendSafe(ws, { t: "player_loot_indexs_set", lootIds: getUserLootIds(me) });
+  return send(ws, { t: "player_loot_indexs_ensureReply", replyTo: id, ok: true });
+}
+
+if (msg.t === "loot_perm_query") {
+  const id = msg.id;
+  const lootId = String(msg.lootId || "").trim();
+  const users = listUsernames();
+  const out = users.map((name) => ({
+    name,
+    has: getUserLootIds(name).includes(lootId),
+  }));
+  return send(ws, {
+    t: "loot_perm_queryReply",
+    replyTo: id,
+    ok: true,
+    lootId,
+    users: out
+  });
+}
+
+if (msg.t === "loot_perm_set") {
+  const id = msg.id;
+  const lootId = String(msg.lootId || "").trim();
+  const user = String(msg.user || "").trim();
+  const allow = !!msg.allow;
+
+  if (!lootId || !user) return send(ws, { t: "loot_perm_setReply", replyTo: id, ok: false, err: "missing_args" });
+
+  if (allow) addUserLootId(user, lootId);
+  else removeUserLootId(user, lootId);
+
+  sendToUser(user, { t: "player_loot_indexs_set", lootIds: getUserLootIds(user) });
+  return send(ws, { t: "loot_perm_setReply", replyTo: id, ok: true });
+}
+return send(ws, { t: "sheet_perm_setReply", replyTo: id, ok: true });
 }
 
     // =========================================================
@@ -605,8 +711,10 @@ if (msg.t === "sheet_perm_set") {
           : (short === "feats" || short === "feat") ? "feat"
           : (short === "abilities" || short === "ability" || short === "prayers" || short === "prayer" || short === "spells" || short === "spell") ? "ability"
           : (short === "sheets" || short === "sheet" || short === "characters" || short === "chars") ? "sheet"
+          : (short === "loot_tables" || short === "loot" || short === "loottables" || short === "loot-tables") ? "loot"
+          : (short === "shops" || short === "shop") ? "shop"
           : "item";
-        const tableNorm = (kind === "status") ? "statuses" : (kind === "feat") ? "feats" : (kind === "ability") ? "abilities" : (kind === "sheet") ? "sheets" : "items";
+        const tableNorm = (kind === "status") ? "statuses" : (kind === "feat") ? "feats" : (kind === "ability") ? "abilities" : (kind === "sheet") ? "sheets" : (kind === "loot") ? "loot_tables" : (kind === "shop") ? "shops" : "items";
 
         const senderName = usernameOf(ws);
         const ackId = `${kind}:create:${key}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`;
@@ -623,6 +731,8 @@ if (msg.t === "sheet_perm_set") {
           : (kind === "feat") ? "feat_created"
           : (kind === "ability") ? "ability_created"
           : (kind === "sheet") ? "sheet_created"
+          : (kind === "loot") ? "loot_created"
+          : (kind === "shop") ? "shop_created"
           : "item_created";
 
         for (const c of expected) {
@@ -686,8 +796,10 @@ if (msg.t === "sheet_perm_set") {
           : (short === "feats" || short === "feat") ? "feat"
           : (short === "abilities" || short === "ability" || short === "prayers" || short === "prayer" || short === "spells" || short === "spell") ? "ability"
           : (short === "sheets" || short === "sheet" || short === "characters" || short === "chars") ? "sheet"
+          : (short === "loot_tables" || short === "loot" || short === "loottables" || short === "loot-tables") ? "loot"
+          : (short === "shops" || short === "shop") ? "shop"
           : "item";
-        const tableNorm = (kind === "status") ? "statuses" : (kind === "feat") ? "feats" : (kind === "ability") ? "abilities" : (kind === "sheet") ? "sheets" : "items";
+        const tableNorm = (kind === "status") ? "statuses" : (kind === "feat") ? "feats" : (kind === "ability") ? "abilities" : (kind === "sheet") ? "sheets" : (kind === "loot") ? "loot_tables" : (kind === "shop") ? "shops" : "items";
 
         const senderName = usernameOf(ws);
         const ackId = `${kind}:update:${key}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`;
@@ -703,6 +815,8 @@ if (msg.t === "sheet_perm_set") {
           : (kind === "feat") ? "feat_updated"
           : (kind === "ability") ? "ability_updated"
           : (kind === "sheet") ? "sheet_updated"
+          : (kind === "loot") ? "loot_updated"
+          : (kind === "shop") ? "shop_updated"
           : "item_updated";
 
         for (const c of expected) {
@@ -745,7 +859,31 @@ if (msg.t === "sheet_perm_set") {
         return send(ws, { t: "tableDeleteReply", replyTo: id, ok: false, err: "missing key", key });
       }
 
-      table.splice(idx, 1);
+
+table.splice(idx, 1);
+
+// If a sheet is deleted, also remove it from ALL player visibility lists.
+// (Otherwise clients can end up with permissions pointing at missing sheets.)
+try {
+  const tableNorm = normalizeTableName(msg.table);
+  if (tableNorm === "sheets") {
+    let touched = false;
+    const sid = key;
+    for (const user of Object.keys(PLAYER_INDEXS || {})) {
+      const before = getUserSheetIds(user);
+      const after = before.filter((x) => String(x || "") !== sid);
+      if (after.length !== before.length) {
+        setUserSheetIds(user, after);
+        touched = true;
+        // Push updated visibility to target if connected
+        sendToUser(user, { t: "player_indexs_set", sheetIds: getUserSheetIds(user) });
+      }
+    }
+    if (touched) {
+      try { console.log(`[NET] sheet '${sid}' removed from player_indexs for all users`); } catch (_) {}
+    }
+  }
+} catch (_) {}
 
       // ✅ Broadcast deletion to all OTHER connected clients.
       // Clients will ACK receipt so we can log who got it.
@@ -755,6 +893,8 @@ if (msg.t === "sheet_perm_set") {
           : (tableNorm === "feats") ? "feat"
           : (tableNorm === "abilities") ? "ability"
           : (tableNorm === "sheets") ? "sheet"
+          : (tableNorm === "loot_tables") ? "loot"
+          : (tableNorm === "shops") ? "shop"
           : "item";
 
         const senderName = usernameOf(ws);
@@ -771,6 +911,8 @@ if (msg.t === "sheet_perm_set") {
           : (kind === "feat") ? "feat_deleted"
           : (kind === "ability") ? "ability_deleted"
           : (kind === "sheet") ? "sheet_deleted"
+          : (kind === "loot") ? "loot_deleted"
+          : (kind === "shop") ? "shop_deleted"
           : "item_deleted";
 
         for (const c of expected) {
