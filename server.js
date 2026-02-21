@@ -339,6 +339,12 @@ function getTable(name) {
   if (k === "feat" || k === "feats") return TABLES.feats;
   if (k === "ability" || k === "abilities" || k === "prayer" || k === "prayers" || k === "spell" || k === "spells") return TABLES.abilities;
   if (k === "sheet" || k === "sheets" || k === "characters" || k === "chars") return TABLES.sheets;
+  // Loot / Shops
+  if (k === "loot_tables" || k === "loot" || k === "loottables" || k === "loot-tables") return TABLES.loot_tables;
+  if (k === "shops" || k === "shop") return TABLES.shops;
+  // Per-player visibility indexes
+  if (k === "player_indexs" || k === "player_indexes" || k === "player_index" || k === "player_sheet_indexs") return TABLES.player_indexs;
+  if (k === "player_loot_indexs" || k === "player_loot_indexes" || k === "player_loot_index") return TABLES.player_loot_indexs;
   return TABLES.items; // default/back-compat
 }
 
@@ -349,6 +355,10 @@ function normalizeTableName(name) {
   if (k === "feat" || k === "feats") return "feats";
   if (k === "ability" || k === "abilities" || k === "prayer" || k === "prayers" || k === "spell" || k === "spells") return "abilities";
   if (k === "sheet" || k === "sheets" || k === "characters" || k === "chars") return "sheets";
+  if (k === "loot_tables" || k === "loot" || k === "loottables" || k === "loot-tables") return "loot_tables";
+  if (k === "shops" || k === "shop") return "shops";
+  if (k === "player_indexs" || k === "player_indexes" || k === "player_index" || k === "player_sheet_indexs") return "player_indexs";
+  if (k === "player_loot_indexs" || k === "player_loot_indexes" || k === "player_loot_index") return "player_loot_indexs";
   return "items";
 }
 
@@ -699,8 +709,6 @@ return send(ws, { t: "sheet_perm_setReply", replyTo: id, ok: true });
       // Persist
       try { scheduleSave(normalizeTableName(msg.table)); } catch (_) {}
 
-      // Persist
-      try { scheduleSave(normalizeTableName(msg.table)); } catch (_) {}
 
       // ✅ Broadcast newly created rows to all OTHER connected clients.
       // Clients will ACK receipt so we can log who got it.
