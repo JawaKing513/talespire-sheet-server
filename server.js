@@ -103,7 +103,7 @@ const TABLES = {
 // Per-player sheet visibility map: username -> [sheetId,...]
 let PLAYER_INDEXS = {};
 
-// Per-player loot table visibility: username -> [lootTableId,...]
+// Per-player loot table visibility map: username -> [lootTableId,...]
 let PLAYER_LOOT_INDEXS = {};
 
 
@@ -123,9 +123,9 @@ const TABLE_FILES = {
   feats: path.join(DATA_DIR, "feats.json"),
   abilities: path.join(DATA_DIR, "abilities.json"),
   sheets: path.join(DATA_DIR, "sheets.json"),
+  player_indexs: path.join(DATA_DIR, "player_indexs.json"),
   loot_tables: path.join(DATA_DIR, "loot_tables.json"),
   shops: path.join(DATA_DIR, "shops.json"),
-  player_indexs: path.join(DATA_DIR, "player_indexs.json"),
   player_loot_indexs: path.join(DATA_DIR, "player_loot_indexs.json"),
 };
 
@@ -163,15 +163,22 @@ function loadAllTables() {
   const sheets = safeReadJson(TABLE_FILES.sheets, []);
   const player_indexs = safeReadJson(TABLE_FILES.player_indexs, {});
 
+  const loot_tables = safeReadJson(TABLE_FILES.loot_tables, []);
+  const shops = safeReadJson(TABLE_FILES.shops, []);
+  const player_loot_indexs = safeReadJson(TABLE_FILES.player_loot_indexs, {});
+
   TABLES.items = Array.isArray(items) ? items.filter(r => Array.isArray(r) && r.length === 2) : [];
   TABLES.statuses = Array.isArray(statuses) ? statuses.filter(r => Array.isArray(r) && r.length === 2) : [];
   TABLES.feats = Array.isArray(feats) ? feats.filter(r => Array.isArray(r) && r.length === 2) : [];
   TABLES.abilities = Array.isArray(abilities) ? abilities.filter(r => Array.isArray(r) && r.length === 2) : [];
   TABLES.sheets = Array.isArray(sheets) ? sheets.filter(r => Array.isArray(r) && r.length === 2) : [];
+  TABLES.loot_tables = Array.isArray(loot_tables) ? loot_tables.filter(r => Array.isArray(r) && r.length === 2) : [];
+  TABLES.shops = Array.isArray(shops) ? shops.filter(r => Array.isArray(r) && r.length === 2) : [];
 
   PLAYER_INDEXS = (player_indexs && typeof player_indexs === "object") ? player_indexs : {};
+  PLAYER_LOOT_INDEXS = (player_loot_indexs && typeof player_loot_indexs === "object") ? player_loot_indexs : {};
 
-  console.log(`[PERSIST] loaded: items=${TABLES.items.length}, statuses=${TABLES.statuses.length}, feats=${TABLES.feats.length}, abilities=${TABLES.abilities.length}, sheets=${TABLES.sheets.length}, player_indexs=${Object.keys(PLAYER_INDEXS||{}).length}`);
+  console.log(`[PERSIST] loaded: items=${TABLES.items.length}, statuses=${TABLES.statuses.length}, feats=${TABLES.feats.length}, abilities=${TABLES.abilities.length}, sheets=${TABLES.sheets.length}, loot_tables=${TABLES.loot_tables.length}, shops=${TABLES.shops.length}, player_indexs=${Object.keys(PLAYER_INDEXS||{}).length}, player_loot_indexs=${Object.keys(PLAYER_LOOT_INDEXS||{}).length}`);
 }
 
 const SAVE_TIMERS = new Map(); // tableName -> timeout
@@ -230,43 +237,6 @@ function setUserSheetIds(name, ids) {
   }
 }
 
-
-// ===== Loot table visibility helpers =====
-function getUserLootIds(name) {
-  const n = normalizeUser(name);
-  const arr = PLAYER_LOOT_INDEXS?.[n];
-  return Array.isArray(arr) ? arr.map(String).filter(Boolean) : [];
-}
-function setUserLootIds(name, ids) {
-  const n = normalizeUser(name);
-  if (!n) return;
-  const out = Array.isArray(ids) ? ids.map(String).filter(Boolean) : [];
-  PLAYER_LOOT_INDEXS[n] = Array.from(new Set(out));
-  try {
-    ensureDataDir();
-    atomicWriteJson(TABLE_FILES.player_loot_indexs, PLAYER_LOOT_INDEXS);
-  } catch (e) {
-    console.log(`[PERSIST] failed saving player_loot_indexs: ${e?.message || e}`);
-  }
-}
-function addUserLootId(name, lootId) {
-  const n = normalizeUser(name);
-  const id = String(lootId || "").trim();
-  if (!n || !id) return;
-  const before = getUserLootIds(n);
-  if (before.includes(id)) return;
-  before.push(id);
-  setUserLootIds(n, before);
-}
-function removeUserLootId(name, lootId) {
-  const n = normalizeUser(name);
-  const id = String(lootId || "").trim();
-  if (!n || !id) return;
-  const before = getUserLootIds(n);
-  const after = before.filter((x) => x !== id);
-  setUserLootIds(n, after);
-}
-
 function addUserSheetId(name, sheetId) {
   const n = normalizeUser(name);
   const sid = String(sheetId || "").trim();
@@ -283,6 +253,32 @@ function removeUserSheetId(name, sheetId) {
   const cur = getUserSheetIds(n).filter((x) => x !== sid);
   setUserSheetIds(n, cur);
 }
+
+// ===== Loot table visibility helpers (player_loot_indexs) =====
+function getUserLootIds(user) {
+  const u = normalizeUser(user);
+  const arr = PLAYER_LOOT_INDEXS?.[u];
+  return Array.isArray(arr) ? arr.filter(Boolean).map(String) : [];
+}
+function addUserLootId(user, lootId) {
+  const u = normalizeUser(user);
+  const id = String(lootId || "").trim();
+  if (!u || !id) return;
+  const cur = getUserLootIds(u);
+  if (!cur.includes(id)) cur.push(id);
+  PLAYER_LOOT_INDEXS[u] = cur;
+  try { schedulePlayerLootIndexsSave(); } catch (_) {}
+}
+function removeUserLootId(user, lootId) {
+  const u = normalizeUser(user);
+  const id = String(lootId || "").trim();
+  if (!u || !id) return;
+  const cur = getUserLootIds(u);
+  const next = cur.filter((x) => x !== id);
+  PLAYER_LOOT_INDEXS[u] = next;
+  try { schedulePlayerLootIndexsSave(); } catch (_) {}
+}
+
 
 function sendToUser(user, obj) {
   const name = normalizeUser(user);
@@ -339,12 +335,6 @@ function getTable(name) {
   if (k === "feat" || k === "feats") return TABLES.feats;
   if (k === "ability" || k === "abilities" || k === "prayer" || k === "prayers" || k === "spell" || k === "spells") return TABLES.abilities;
   if (k === "sheet" || k === "sheets" || k === "characters" || k === "chars") return TABLES.sheets;
-  // Loot / Shops
-  if (k === "loot_tables" || k === "loot" || k === "loottables" || k === "loot-tables") return TABLES.loot_tables;
-  if (k === "shops" || k === "shop") return TABLES.shops;
-  // Per-player visibility indexes
-  if (k === "player_indexs" || k === "player_indexes" || k === "player_index" || k === "player_sheet_indexs") return TABLES.player_indexs;
-  if (k === "player_loot_indexs" || k === "player_loot_indexes" || k === "player_loot_index") return TABLES.player_loot_indexs;
   return TABLES.items; // default/back-compat
 }
 
@@ -355,10 +345,8 @@ function normalizeTableName(name) {
   if (k === "feat" || k === "feats") return "feats";
   if (k === "ability" || k === "abilities" || k === "prayer" || k === "prayers" || k === "spell" || k === "spells") return "abilities";
   if (k === "sheet" || k === "sheets" || k === "characters" || k === "chars") return "sheets";
-  if (k === "loot_tables" || k === "loot" || k === "loottables" || k === "loot-tables") return "loot_tables";
-  if (k === "shops" || k === "shop") return "shops";
-  if (k === "player_indexs" || k === "player_indexes" || k === "player_index" || k === "player_sheet_indexs") return "player_indexs";
-  if (k === "player_loot_indexs" || k === "player_loot_indexes" || k === "player_loot_index") return "player_loot_indexs";
+  if (k === "loot" || k === "loots" || k === "loottable" || k === "loot_table" || k === "loot_tables" || k === "loottables") return "loot_tables";
+  if (k === "shop" || k === "shops") return "shops";
   return "items";
 }
 
@@ -404,6 +392,7 @@ wss.on("connection", (ws, req) => {
       // Push current sheet visibility for this user (server authoritative)
       try {
         sendSafe(ws, { t: "player_indexs_set", sheetIds: getUserSheetIds(desiredName) });
+      try { sendSafe(ws, { t: "player_loot_indexs_set", lootIds: getUserLootIds(desiredName) }); } catch (_) {}
       // Also push the actual sheet payloads for the sheets this user is allowed to see
       try { sendSheetsToWs(ws, getUserSheetIds(desiredName)); } catch (_) {}
       } catch (_) {}
@@ -492,66 +481,7 @@ if (msg.t === "sheet_perm_set") {
     if (host && usernameOf(host) === normalizeUser(user)) { try { sendSheetToWs(host, sheetId); } catch (_) {} }
   }
 
-  
-
-// =========================================================
-// Loot table visibility (server-authoritative) : player_loot_indexs
-// =========================================================
-if (msg.t === "player_loot_indexs_get") {
-  const id = msg.id;
-  const me = usernameOf(ws);
-  return send(ws, {
-    t: "player_loot_indexs_getReply",
-    replyTo: id,
-    ok: true,
-    user: me,
-    lootIds: getUserLootIds(me)
-  });
-}
-
-if (msg.t === "player_loot_indexs_ensure") {
-  const id = msg.id;
-  const me = usernameOf(ws);
-  const lootId = String(msg.lootId || "").trim();
-  if (!lootId) return send(ws, { t: "player_loot_indexs_ensureReply", replyTo: id, ok: false, err: "missing_lootId" });
-
-  addUserLootId(me, lootId);
-  sendSafe(ws, { t: "player_loot_indexs_set", lootIds: getUserLootIds(me) });
-  return send(ws, { t: "player_loot_indexs_ensureReply", replyTo: id, ok: true });
-}
-
-if (msg.t === "loot_perm_query") {
-  const id = msg.id;
-  const lootId = String(msg.lootId || "").trim();
-  const users = listUsernames();
-  const out = users.map((name) => ({
-    name,
-    has: getUserLootIds(name).includes(lootId),
-  }));
-  return send(ws, {
-    t: "loot_perm_queryReply",
-    replyTo: id,
-    ok: true,
-    lootId,
-    users: out
-  });
-}
-
-if (msg.t === "loot_perm_set") {
-  const id = msg.id;
-  const lootId = String(msg.lootId || "").trim();
-  const user = String(msg.user || "").trim();
-  const allow = !!msg.allow;
-
-  if (!lootId || !user) return send(ws, { t: "loot_perm_setReply", replyTo: id, ok: false, err: "missing_args" });
-
-  if (allow) addUserLootId(user, lootId);
-  else removeUserLootId(user, lootId);
-
-  sendToUser(user, { t: "player_loot_indexs_set", lootIds: getUserLootIds(user) });
-  return send(ws, { t: "loot_perm_setReply", replyTo: id, ok: true });
-}
-return send(ws, { t: "sheet_perm_setReply", replyTo: id, ok: true });
+  return send(ws, { t: "sheet_perm_setReply", replyTo: id, ok: true });
 }
 
     // =========================================================
@@ -709,6 +639,8 @@ return send(ws, { t: "sheet_perm_setReply", replyTo: id, ok: true });
       // Persist
       try { scheduleSave(normalizeTableName(msg.table)); } catch (_) {}
 
+      // Persist
+      try { scheduleSave(normalizeTableName(msg.table)); } catch (_) {}
 
       // ✅ Broadcast newly created rows to all OTHER connected clients.
       // Clients will ACK receipt so we can log who got it.
@@ -719,7 +651,7 @@ return send(ws, { t: "sheet_perm_setReply", replyTo: id, ok: true });
           : (short === "feats" || short === "feat") ? "feat"
           : (short === "abilities" || short === "ability" || short === "prayers" || short === "prayer" || short === "spells" || short === "spell") ? "ability"
           : (short === "sheets" || short === "sheet" || short === "characters" || short === "chars") ? "sheet"
-          : (short === "loot_tables" || short === "loot" || short === "loottables" || short === "loot-tables") ? "loot"
+          : (short === "loot_tables" || short === "loot" || short === "loottables" || short === "loot_table") ? "loot"
           : (short === "shops" || short === "shop") ? "shop"
           : "item";
         const tableNorm = (kind === "status") ? "statuses" : (kind === "feat") ? "feats" : (kind === "ability") ? "abilities" : (kind === "sheet") ? "sheets" : (kind === "loot") ? "loot_tables" : (kind === "shop") ? "shops" : "items";
@@ -739,8 +671,6 @@ return send(ws, { t: "sheet_perm_setReply", replyTo: id, ok: true });
           : (kind === "feat") ? "feat_created"
           : (kind === "ability") ? "ability_created"
           : (kind === "sheet") ? "sheet_created"
-          : (kind === "loot") ? "loot_created"
-          : (kind === "shop") ? "shop_created"
           : "item_created";
 
         for (const c of expected) {
@@ -804,7 +734,7 @@ return send(ws, { t: "sheet_perm_setReply", replyTo: id, ok: true });
           : (short === "feats" || short === "feat") ? "feat"
           : (short === "abilities" || short === "ability" || short === "prayers" || short === "prayer" || short === "spells" || short === "spell") ? "ability"
           : (short === "sheets" || short === "sheet" || short === "characters" || short === "chars") ? "sheet"
-          : (short === "loot_tables" || short === "loot" || short === "loottables" || short === "loot-tables") ? "loot"
+          : (short === "loot_tables" || short === "loot" || short === "loottables" || short === "loot_table") ? "loot"
           : (short === "shops" || short === "shop") ? "shop"
           : "item";
         const tableNorm = (kind === "status") ? "statuses" : (kind === "feat") ? "feats" : (kind === "ability") ? "abilities" : (kind === "sheet") ? "sheets" : (kind === "loot") ? "loot_tables" : (kind === "shop") ? "shops" : "items";
@@ -901,8 +831,6 @@ try {
           : (tableNorm === "feats") ? "feat"
           : (tableNorm === "abilities") ? "ability"
           : (tableNorm === "sheets") ? "sheet"
-          : (tableNorm === "loot_tables") ? "loot"
-          : (tableNorm === "shops") ? "shop"
           : "item";
 
         const senderName = usernameOf(ws);
@@ -919,8 +847,6 @@ try {
           : (kind === "feat") ? "feat_deleted"
           : (kind === "ability") ? "ability_deleted"
           : (kind === "sheet") ? "sheet_deleted"
-          : (kind === "loot") ? "loot_deleted"
-          : (kind === "shop") ? "shop_deleted"
           : "item_deleted";
 
         for (const c of expected) {
